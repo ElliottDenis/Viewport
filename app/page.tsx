@@ -3,10 +3,9 @@
 import { useState } from "react";
 import UploadForm from "../components/UploadForm";
 
-type CodeResp =
-  | { error: string }
-  | { kind: "text"; text: string; title?: string | null }
-  | { kind: "image" | "video" | "doc"; url: string; mimeType?: string; title?: string | null };
+type SuccessRespText = { kind: "text"; text: string; title?: string | null };
+type SuccessRespFile = { kind: "image" | "video" | "doc"; url: string; mimeType?: string; title?: string | null };
+type CodeResp = { error: string } | SuccessRespText | SuccessRespFile;
 
 export default function HomePage() {
   const [tab, setTab] = useState<"send" | "view">("send");
@@ -31,7 +30,7 @@ export default function HomePage() {
       const res = await fetch(`/api/code/${encodeURIComponent(code)}`);
       const text = await res.text();
 
-      // If server returned non-JSON (HTML error) — show it
+      // try parse JSON; if not JSON show helpful console output
       try {
         const json = JSON.parse(text) as CodeResp;
         if ("error" in json) {
@@ -41,7 +40,6 @@ export default function HomePage() {
           setResp(json);
         }
       } catch {
-        // not valid JSON — show raw text
         setError("Unexpected response from server. See console for details.");
         console.error("Non-JSON response:", text);
       }
@@ -58,6 +56,10 @@ export default function HomePage() {
     setError(null);
     setCodeInput("");
   }
+
+  // type narrowing helpers (optional, but clear)
+  const isSuccessWithKind = (r: CodeResp | null): r is SuccessRespText | SuccessRespFile =>
+    r !== null && "kind" in r;
 
   return (
     <div className="flex flex-col items-center text-center min-h-screen py-12">
@@ -146,28 +148,32 @@ export default function HomePage() {
                   <div className="text-sm text-rose-300">{resp.error}</div>
                 )}
 
-                {resp && resp.kind === "text" && (
+                {/* Text */}
+                {isSuccessWithKind(resp) && resp.kind === "text" && (
                   <div className="mt-4 text-left bg-[#0b0d11] border border-gray-700 rounded p-4">
                     {resp.title && <div className="font-semibold mb-2">{resp.title}</div>}
                     <pre style={{ whiteSpace: "pre-wrap" }} className="text-sm">{resp.text}</pre>
                   </div>
                 )}
 
-                {resp && (resp.kind === "image") && (
+                {/* Image */}
+                {isSuccessWithKind(resp) && resp.kind === "image" && (
                   <div className="mt-4">
                     {resp.title && <div className="font-semibold mb-2">{resp.title}</div>}
                     <img src={resp.url} alt={resp.title ?? "Shared image"} className="max-w-full rounded" />
                   </div>
                 )}
 
-                {resp && resp.kind === "video" && (
+                {/* Video */}
+                {isSuccessWithKind(resp) && resp.kind === "video" && (
                   <div className="mt-4">
                     {resp.title && <div className="font-semibold mb-2">{resp.title}</div>}
                     <video src={resp.url} controls className="w-full rounded" />
                   </div>
                 )}
 
-                {resp && resp.kind === "doc" && (
+                {/* Doc */}
+                {isSuccessWithKind(resp) && resp.kind === "doc" && (
                   <div className="mt-4">
                     {resp.title && <div className="font-semibold mb-2">{resp.title}</div>}
                     <a className="btn px-4 py-2 bg-gray-600 rounded text-white" href={resp.url} target="_blank" rel="noreferrer">
