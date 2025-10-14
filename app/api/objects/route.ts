@@ -1,34 +1,41 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { supabaseService } from '@/lib/supabase';
-import { makeCode } from '@/lib/code';
+import { NextResponse } from "next/server";
+import { createServiceClient } from "../../../lib/supabaseClient";
+import crypto from "crypto";
 
-export async function POST(req: NextRequest) {
-  const { kind, title, downloadsAllowed = true, expiresInHours, textContent, filename, mimeType } = await req.json();
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { kind, title, mimeType, bytes, text_content } = body;
 
-  if (!['image','video','doc','text'].includes(kind)) {
-    return NextResponse.json({ error: 'invalid kind' }, { status: 400 });
-  }
+    if (!kind) return NextResponse.json({ error: "kind required" }, { status: 400 });
 
-  const code = makeCode();
-  const expires_at = expiresInHours ? new Date(Date.now() + expiresInHours*3600*1000).toISOString() : null;
+    const id = crypto.randomUUID();
+    const code = (Math.random().toString(36).slice(2, 8)).toUpperCase();
 
-  const { data, error } = await supabaseService
-    .from('objects')
-    .insert([{
+    const filename = kind === "text" ? "content.txt" : (body.title || "upload");
+    const sanitized = filename.replace(/\\s+/g, "_").slice(0, 200);
+    const storagePath = `objects/${id}/${sanitized}`;
+
+    const svc = createServiceClient();
+    const { data, error } = await svc.from("objects").insert({
+      id,
       code,
       kind,
-      title: title || null,
-      downloads_allowed: !!downloadsAllowed,
-      expires_at,
-      text_content: kind === 'text' ? (textContent || '') : null,
-      mime_type: kind === 'text' ? 'text/plain' : (mimeType || null),
-      bytes: null,
-      storage_path: null
-    }])
-    .select()
-    .single();
+      title: title ?? null,
+      text_content: text_content ?? null,
+      storage_path: storagePath,
+      mime_type: mimeType ?? null,
+      bytes: bytes ?? null,
+    }).select().single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      console.error("Insert error", error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
 
-  return NextResponse.json({ id: data.id, code });
+    return NextResponse.json({ id, code, storage_path: storagePath });
+  } catch (err: any) {
+    console.error(err);
+    return NextResponse.json({ error: err.message ?? "unknown" }, { status: 500 });
+  }
 }
