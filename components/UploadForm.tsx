@@ -3,90 +3,125 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
+type Account = { id: string; slug: string; name: string };
+
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB limit (change as needed)
+const BUCKET = process.env.NEXT_PUBLIC_STORAGE_BUCKET ?? "objects"; // change default if your bucket is named differently
+
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
 
-  // accounts for dropdown
-  const [accounts, setAccounts] = useState<{ id: string; slug: string; name: string }[]>([]);
-  const [recipientId, setRecipientId] = useState<string | null>(null);
+  // accounts dropdown
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [recipientId, setRecipientId] = useState<string | "">("");
 
   useEffect(() => {
-    // fetch accounts list from server
-    async function load() {
+    async function loadAccounts() {
       try {
         const res = await fetch("/api/accounts");
         if (!res.ok) return;
         const list = await res.json();
-        setAccounts(list || []);
+        setAccounts(Array.isArray(list) ? list : []);
       } catch (e) {
-        console.error("accounts fetch error", e);
+        console.error("Failed to load accounts", e);
       }
     }
-    load();
+    loadAccounts();
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setStatus("Creating object...");
+    setStatus(null);
+    setCode(null);
+
+    // simple validation
+    if (!file && !text.trim()) {
+      setStatus("Please attach a file or enter some text to share.");
+      return;
+    }
+    if (file && file.size > MAX_FILE_BYTES) {
+      setStatus(`File too large — max ${(MAX_FILE_BYTES / 1024 / 1024).toFixed(1)} MB.`);
+      return;
+    }
+
     try {
+      setStatus("Creating object metadata...");
       const kind = file ? (file.type.startsWith("image/") ? "image" : "doc") : "text";
+      const body = {
+        kind,
+        title: file ? file.name : text.slice(0, 80) || "Untitled",
+        mimeType: file ? file.type : null,
+        bytes: file ? file.size : null,
+        text_content: !file ? text : null,
+        recipient_account_id: recipientId || null,
+        filename: file ? file.name : undefined, // helpful to server for storage_path
+      };
 
       const res = await fetch("/api/objects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind,
-          title: file?.name ?? (text ? text.slice(0, 60) : "Untitled"),
-          mimeType: file?.type,
-          bytes: file?.size,
-          text_content: text || null,
-          recipient_account_id: recipientId, // include recipient
-        }),
+        body: JSON.stringify(body),
       });
 
+      const textResp = await res.text();
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error("Create failed: " + res.status + " " + t);
+        console.error("Create metadata failed:", res.status, textResp);
+        setStatus("Failed to create object: " + textResp);
+        return;
       }
-      const body = await res.json();
-      const id = body.id as string;
-      const objectStoragePath = body.storage_path as string;
-      const codeFromServer = body.code as string;
 
-      setStatus("Uploading file...");
+      const json = JSON.parse(textResp) as { id: string; storage_path: string; code: string };
+      const { id, storage_path: storagePath, code: returnedCode } = json;
+      setStatus("Uploading file to storage...");
+
+      // if there's a file to upload, upload now
       if (file) {
-        const { error } = await supabase.storage
-          .from("objects")
-          .upload(objectStoragePath, file, { cacheControl: "3600", upsert: false });
-        if (error) throw error;
+        const uploadResult = await supabase.storage.from(BUCKET).upload(storagePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+        if (uploadResult.error) {
+          console.error("Upload failed", uploadResult.error);
+          // Optionally: delete the DB row here by calling a server route to clean up
+          setStatus("Upload failed: " + uploadResult.error.message);
+          return;
+        }
+        console.log("Upload success", uploadResult.data);
+      } else {
+        // no file (text-only), you might want to write the text content to storage or just keep in DB
+        console.log("No file to upload (text-only).");
       }
 
       setStatus("Confirming upload...");
       const confirmRes = await fetch(`/api/objects/${id}/confirm`, { method: "POST" });
+      const confirmText = await confirmRes.text();
       if (!confirmRes.ok) {
-        const t = await confirmRes.text();
-        throw new Error("Confirm failed: " + t);
+        console.error("Confirm failed", confirmRes.status, confirmText);
+        setStatus("Confirm failed: " + confirmText);
+        return;
       }
 
-      setCode(codeFromServer);
-      setStatus("Done! Code generated.");
+      setCode(returnedCode);
+      setStatus("Done — code generated.");
     } catch (err: any) {
-      console.error(err);
+      console.error("Unexpected error in upload flow", err);
       setStatus("Error: " + (err.message || String(err)));
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      <label className="text-sm text-gray-300">Send to (optional)</label>
       <select
-        value={recipientId ?? ""}
-        onChange={(e) => setRecipientId(e.target.value || null)}
+        value={recipientId}
+        onChange={(e) => setRecipientId(e.target.value)}
         className="w-full max-w-md rounded-md p-2 bg-[#0b0d11] text-gray-100 border border-gray-700"
       >
-        <option value="">Send to public / general channel</option>
+        <option value="">Public / General channel</option>
         {accounts.map((a) => (
           <option key={a.id} value={a.id}>
             {a.name}
@@ -94,26 +129,57 @@ export default function UploadForm() {
         ))}
       </select>
 
+      <label className="text-sm text-gray-300">Text (optional)</label>
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Write text (optional)"
-        className="p-2 rounded bg-[#0b0d11] border border-gray-700"
+        className="p-2 rounded bg-[#0b0d11] border border-gray-700 text-gray-100"
         rows={4}
       />
-      <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+
+      <label className="text-sm text-gray-300">File (optional)</label>
+      <input
+        type="file"
+        onChange={(e) => {
+          const f = e.target.files?.[0] ?? null;
+          setFile(f);
+        }}
+        className="text-sm text-gray-100"
+      />
+
+      <p className="hint text-xs text-gray-400">
+        Max {(MAX_FILE_BYTES / 1024 / 1024).toFixed(1)} MB.
+      </p>
+
       <div className="flex gap-2">
-        <button type="submit" className="px-4 py-2 bg-blue-500 rounded">Upload</button>
+        <button type="submit" className="px-4 py-2 bg-blue-500 rounded text-black font-semibold">
+          Upload
+        </button>
+        <button
+          type="button"
+          className="px-4 py-2 bg-gray-700 rounded text-white"
+          onClick={() => {
+            setFile(null);
+            setText("");
+            setRecipientId("");
+            setStatus(null);
+            setCode(null);
+          }}
+        >
+          Reset
+        </button>
       </div>
 
       {status && <div className="text-sm mt-2 text-gray-300">{status}</div>}
+
       {code && (
         <div className="mt-3 p-3 bg-[#071024] rounded">
-          <div className="mb-2">Share code:</div>
+          <div className="mb-2 text-sm text-gray-200">Share code:</div>
           <div className="flex gap-2 items-center">
-            <div className="font-mono text-lg bg-[#0b1220] px-3 py-2 rounded">{code}</div>
+            <div className="font-mono text-lg bg-[#0b1220] px-3 py-2 rounded text-gray-100">{code}</div>
             <button
-              className="px-3 py-1 bg-gray-600 rounded"
+              className="px-3 py-1 bg-gray-600 rounded text-white"
               onClick={() => {
                 navigator.clipboard.writeText(code);
               }}
