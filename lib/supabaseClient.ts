@@ -1,16 +1,11 @@
+// lib/supabaseClient.ts
 import { createClient } from "@supabase/supabase-js";
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase env vars are not set.");
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+export const supabase = createClient(URL, ANON);
 
 export function createServiceClient() {
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  if (!serviceKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY in env");
-  return createClient(supabaseUrl, serviceKey, { auth: { persistSession: false }});
+  const SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  if (!SERVICE) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+  return createClient(URL, SERVICE, { auth: { persistSession: false } });
 }

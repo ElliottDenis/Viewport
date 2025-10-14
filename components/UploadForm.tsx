@@ -6,7 +6,8 @@ import { supabase } from "../lib/supabaseClient";
 type Account = { id: string; slug: string; name: string };
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB limit (change as needed)
-const BUCKET = process.env.NEXT_PUBLIC_STORAGE_BUCKET ?? "objects"; // change default if your bucket is named differently
+// const BUCKET = process.env.NEXT_PUBLIC_STORAGE_BUCKET ?? "locker"; // change default if your bucket is named differently
+const BUCKET = "locker"; // change default if your bucket is named differently
 
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
@@ -77,23 +78,20 @@ export default function UploadForm() {
       const { id, storage_path: storagePath, code: returnedCode } = json;
       setStatus("Uploading file to storage...");
 
-      // if there's a file to upload, upload now
+      // after you get storagePath and id from /api/objects
       if (file) {
-        const uploadResult = await supabase.storage.from(BUCKET).upload(storagePath, file, {
-          cacheControl: "3600",
-          upsert: false,
-        });
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("storagePath", storagePath);
 
-        if (uploadResult.error) {
-          console.error("Upload failed", uploadResult.error);
-          // Optionally: delete the DB row here by calling a server route to clean up
-          setStatus("Upload failed: " + uploadResult.error.message);
+        const r = await fetch("/api/upload", { method: "POST", body: fd });
+        const jr = await r.json();
+        if (!r.ok || jr.error) {
+          console.error("server upload failed", jr);
+          setStatus("Upload failed: " + (jr.error || r.statusText));
           return;
         }
-        console.log("Upload success", uploadResult.data);
-      } else {
-        // no file (text-only), you might want to write the text content to storage or just keep in DB
-        console.log("No file to upload (text-only).");
+        console.log("Server upload success", jr);
       }
 
       setStatus("Confirming upload...");

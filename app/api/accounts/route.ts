@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "../../../lib/supabaseClient";
 
+
 export async function GET() {
   try {
     const svc = createServiceClient(); // server-side
