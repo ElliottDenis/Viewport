@@ -3,9 +3,21 @@
 import { useState } from "react";
 import UploadForm from "../components/UploadForm";
 
-type SuccessRespText = { kind: "text"; text: string; title?: string | null };
-type SuccessRespFile = { kind: "image" | "video" | "doc"; url: string; mimeType?: string; title?: string | null };
+function errToMsg(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
+// near top of file — refined types that include id
+type SuccessRespText = { id: string; kind: "text"; text: string; title?: string | null };
+type SuccessRespFile = { id: string; kind: "image" | "video" | "doc"; url: string; mimeType?: string; title?: string | null };
 type CodeResp = { error: string } | SuccessRespText | SuccessRespFile;
+
+// helper type guard
+function hasId(r: CodeResp | null): r is (SuccessRespText | SuccessRespFile) {
+  return r !== null && typeof (r as any).id === "string";
+}
 
 export default function HomePage() {
   const [tab, setTab] = useState<"send" | "view">("send");
@@ -18,34 +30,44 @@ export default function HomePage() {
     if (e) e.preventDefault();
     setError(null);
     setResp(null);
-
+  
     const code = codeInput.trim();
     if (!code) {
       setError("Please enter a code.");
       return;
     }
-
+  
     setLoading(true);
     try {
       const res = await fetch(`/api/code/${encodeURIComponent(code)}`);
       const text = await res.text();
-
-      // try parse JSON; if not JSON show helpful console output
+  
       try {
         const json = JSON.parse(text) as CodeResp;
+  
         if ("error" in json) {
           setError(json.error);
           setResp(null);
-        } else {
-          setResp(json);
+          return;
         }
-      } catch {
+  
+        // success
+        setResp(json);
+  
+        // safely call delete only if we know there's an id
+        if (hasId(json)) {
+          // don't block UI; log errors
+          fetch(`/api/objects/${json.id}/delete`, { method: "POST" }).catch((e) =>
+            console.warn("delete failed:", e)
+          );
+        }
+      } catch (parseErr) {
         setError("Unexpected response from server. See console for details.");
         console.error("Non-JSON response:", text);
       }
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      setError(err?.message || "Network error");
+      setError(errToMsg(err));
     } finally {
       setLoading(false);
     }

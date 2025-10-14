@@ -4,6 +4,7 @@
   "/api/accounts/route": "app/api/accounts/route.js",
   "/api/objects/route": "app/api/objects/route.js",
   "/api/upload/route": "app/api/upload/route.js",
+  "/api/code/[code]/route": "app/api/code/[code]/route.js",
   "/api/objects/[id]/confirm/route": "app/api/objects/[id]/confirm/route.js",
-  "/api/code/[code]/route": "app/api/code/[code]/route.js"
+  "/api/objects/[id]/delete/route": "app/api/objects/[id]/delete/route.js"
 }

@@ -3,6 +3,12 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
+function errToMsg(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
 type Account = { id: string; slug: string; name: string };
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB limit (change as needed)
@@ -28,6 +34,7 @@ export default function UploadForm() {
         setAccounts(Array.isArray(list) ? list : []);
       } catch (e) {
         console.error("Failed to load accounts", e);
+        
       }
     }
     loadAccounts();
@@ -107,7 +114,7 @@ export default function UploadForm() {
       setStatus("Done — code generated.");
     } catch (err: any) {
       console.error("Unexpected error in upload flow", err);
-      setStatus("Error: " + (err.message || String(err)));
+      setStatus(errToMsg(err));
     }
   }
 
