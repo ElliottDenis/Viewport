@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Viewport",
-  description: "Share perspectives, quickly and securely.",
+  description: "Private perspectives, shared safely.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -18,7 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             />
             {/* <h1 className="text-3xl font-bold">Viewport</h1> */}
             <p className="text-sm text-gray-400">
-              Quickly share a view — files, images, text.
+              Private perspectives, shared safely.
             </p>
           </header>
         <main className="w-full max-w-3xl">{children}</main>
