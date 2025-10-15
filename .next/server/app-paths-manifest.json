@@ -1,10 +1,8 @@
 {
+  "/page": "app/page.js",
+  "/view/page": "app/view/page.js",
+  "/send/page": "app/send/page.js",
   "/api/accounts/route": "app/api/accounts/route.js",
   "/api/objects/route": "app/api/objects/route.js",
-  "/api/objects/[id]/confirm/route": "app/api/objects/[id]/confirm/route.js",
-  "/api/objects/[id]/delete/route": "app/api/objects/[id]/delete/route.js",
-  "/api/code/[code]/verify/route": "app/api/code/[code]/verify/route.js",
-  "/send/page": "app/send/page.js",
-  "/view/page": "app/view/page.js",
-  "/page": "app/page.js"
+  "/api/objects/[id]/confirm/route": "app/api/objects/[id]/confirm/route.js"
 }

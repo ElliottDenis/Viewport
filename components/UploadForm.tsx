@@ -1,51 +1,44 @@
+// components/UploadForm.tsx
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
-
-function errToMsg(e: unknown): string {
-  if (typeof e === "string") return e;
-  if (e instanceof Error) return e.message;
-  try { return JSON.stringify(e); } catch { return String(e); }
-}
 
 type Account = { id: string; slug: string; name: string };
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB limit (change as needed)
-// const BUCKET = process.env.NEXT_PUBLIC_STORAGE_BUCKET ?? "locker"; // change default if your bucket is named differently
-const BUCKET = "locker"; // change default if your bucket is named differently
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+const BUCKET = "locker"; // change if your bucket is named differently
 
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [code, setCode] = useState<string | null>(null);
-
-  // accounts dropdown
+  const [pin, setPin] = useState<string | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [recipientId, setRecipientId] = useState<string | "">("");
 
   useEffect(() => {
-    async function loadAccounts() {
+    // fetch accounts for recipient dropdown if you have an endpoint
+    ;(async () => {
       try {
         const res = await fetch("/api/accounts");
         if (!res.ok) return;
         const list = await res.json();
         setAccounts(Array.isArray(list) ? list : []);
       } catch (e) {
-        console.error("Failed to load accounts", e);
-        
+        console.warn("Failed to load accounts", e);
       }
-    }
-    loadAccounts();
+    })();
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus(null);
     setCode(null);
+    setPin(null);
 
-    // simple validation
+    // validation
     if (!file && !text.trim()) {
       setStatus("Please attach a file or enter some text to share.");
       return;
@@ -57,53 +50,63 @@ export default function UploadForm() {
 
     try {
       setStatus("Creating object metadata...");
+      // determine kind
       const kind = file ? (file.type.startsWith("image/") ? "image" : "doc") : "text";
-      const body = {
+      const body: any = {
         kind,
         title: file ? file.name : text.slice(0, 80) || "Untitled",
-        mimeType: file ? file.type : null,
+        mime_type: file ? file.type : null,
         bytes: file ? file.size : null,
         text_content: !file ? text : null,
         recipient_account_id: recipientId || null,
-        filename: file ? file.name : undefined, // helpful to server for storage_path
+        filename: file ? file.name : undefined,
       };
 
-      const res = await fetch("/api/objects", {
+      const createRes = await fetch("/api/objects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
 
-      const textResp = await res.text();
-      if (!res.ok) {
-        console.error("Create metadata failed:", res.status, textResp);
-        setStatus("Failed to create object: " + textResp);
+      const createText = await createRes.text();
+      if (!createRes.ok) {
+        console.error("Create metadata failed:", createRes.status, createText);
+        setStatus("Failed to create object: " + createText);
         return;
       }
 
-      const json = JSON.parse(textResp) as { id: string; storage_path: string; code: string; pin?: string };
-      const { id, storage_path: storagePath, code: returnedCode } = json;
+      // parse JSON safely (server should return id, storage_path, code and maybe pin)
+      const createJson = JSON.parse(createText) as {
+        id: string;
+        storage_path: string;
+        code: string;
+        pin?: string;
+      };
 
-      if (json.pin) {
-        alert(`Saved.\nCode: ${json.code}\nPIN: ${json.pin}`);
+      const { id, storage_path: storagePath, code: returnedCode, pin: returnedPin } = createJson;
+      if (!id || !storagePath || !returnedCode) {
+        setStatus("Create returned unexpected response.");
+        console.error("Unexpected create response:", createJson);
+        return;
       }
 
       setStatus("Uploading file to storage...");
-
-      // after you get storagePath and id from /api/objects
+      // if there's a file, upload to Supabase storage
       if (file) {
-        const fd = new FormData();
-        fd.append("file", file);
-        fd.append("storagePath", storagePath);
+        const uploadResult = await supabase.storage.from(BUCKET).upload(storagePath, file, {
+          cacheControl: "3600",
+          upsert: true,
+        });
 
-        const r = await fetch("/api/upload", { method: "POST", body: fd });
-        const jr = await r.json();
-        if (!r.ok || jr.error) {
-          console.error("server upload failed", jr);
-          setStatus("Upload failed: " + (jr.error || r.statusText));
+        if (uploadResult.error) {
+          console.error("Upload failed", uploadResult.error);
+          // Optionally: call a server endpoint to delete the DB row (cleanup)
+          setStatus("Upload failed: " + uploadResult.error.message);
           return;
         }
-        console.log("Server upload success", jr);
+      } else {
+        // text-only: nothing to upload to storage (we keep text in DB)
+        console.log("Text-only upload, no storage step required.");
       }
 
       setStatus("Confirming upload...");
@@ -115,11 +118,13 @@ export default function UploadForm() {
         return;
       }
 
+      // success: show returned code and optional PIN
       setCode(returnedCode);
+      if (returnedPin) setPin(returnedPin);
       setStatus("Done — code generated.");
     } catch (err: any) {
       console.error("Unexpected error in upload flow", err);
-      setStatus(errToMsg(err));
+      setStatus("Error: " + (err?.message || String(err)));
     }
   }
 
@@ -131,7 +136,7 @@ export default function UploadForm() {
         onChange={(e) => setRecipientId(e.target.value)}
         className="w-full max-w-md rounded-md p-2 bg-[#0b0d11] text-gray-100 border border-gray-700"
       >
-        <option value="">Public / General channel</option>
+        <option value="">General / Public</option>
         {accounts.map((a) => (
           <option key={a.id} value={a.id}>
             {a.name}
@@ -175,6 +180,7 @@ export default function UploadForm() {
             setRecipientId("");
             setStatus(null);
             setCode(null);
+            setPin(null);
           }}
         >
           Reset
@@ -191,13 +197,33 @@ export default function UploadForm() {
             <button
               className="px-3 py-1 bg-gray-600 rounded text-white"
               onClick={() => {
-                navigator.clipboard.writeText(code);
+                navigator.clipboard.writeText(code + (pin ? ` (PIN: ${pin})` : ""));
               }}
               type="button"
             >
               Copy
             </button>
           </div>
+
+          {/* Inline PIN display (shown if server returned one) */}
+          {pin && (
+            <div className="mt-3 text-sm text-gray-200">
+              <div className="mb-1">PIN (save this — shown once):</div>
+              <div className="flex items-center gap-2">
+                <div className="font-mono bg-[#0b1220] px-3 py-2 rounded">{pin}</div>
+                <button
+                  className="px-2 py-1 bg-gray-600 rounded text-white"
+                  onClick={() => navigator.clipboard.writeText(pin)}
+                  type="button"
+                >
+                  Copy PIN
+                </button>
+              </div>
+              <div className="text-xs text-gray-400 mt-2">
+                This PIN will not be shown again — save it now to share with viewers.
+              </div>
+            </div>
+          )}
         </div>
       )}
     </form>
