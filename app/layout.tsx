@@ -4,6 +4,9 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Viewport",
   description: "Private perspectives, shared safely.",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

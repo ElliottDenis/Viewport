@@ -1,5 +1,4 @@
 {
-  "/api/objects/route": "app/api/objects/route.js",
-  "/api/objects/[id]/confirm/route": "app/api/objects/[id]/confirm/route.js",
+  "/page": "app/page.js",
   "/api/accounts/route": "app/api/accounts/route.js"
 }
