@@ -554,6 +554,9 @@ video {
 .inline-flex {
   display: inline-flex;
 }
+.table {
+  display: table;
+}
 .h-28 {
   height: 7rem;
 }
