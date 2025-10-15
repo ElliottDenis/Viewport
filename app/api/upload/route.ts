@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "../../../lib/supabaseClient";
 
-export const runtime = "node";
+// export const runtime = "node";
 
 export async function POST(req: Request) {
   try {
