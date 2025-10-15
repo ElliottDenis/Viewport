@@ -81,8 +81,13 @@ export default function UploadForm() {
         return;
       }
 
-      const json = JSON.parse(textResp) as { id: string; storage_path: string; code: string };
+      const json = JSON.parse(textResp) as { id: string; storage_path: string; code: string; pin?: string };
       const { id, storage_path: storagePath, code: returnedCode } = json;
+
+      if (json.pin) {
+        alert(`Saved.\nCode: ${json.code}\nPIN: ${json.pin}`);
+      }
+
       setStatus("Uploading file to storage...");
 
       // after you get storagePath and id from /api/objects
