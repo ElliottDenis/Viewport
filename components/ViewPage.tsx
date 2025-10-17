@@ -29,7 +29,9 @@ export default function ViewPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Try a bunch of possible url field names
+  // only show pin input when server indicates it's required
+  const [needsPin, setNeedsPin] = useState(false);
+
   const normalizeUrl = (obj: any): string | null => {
     if (!obj) return null;
     return obj.url || obj.signedUrl || obj.signed_url || obj.signed_upload_url || null;
@@ -39,6 +41,7 @@ export default function ViewPage() {
     e?.preventDefault();
     setError(null);
     setResp(null);
+    setNeedsPin(false); // reset until server indicates otherwise
 
     const code = codeInput.trim();
     if (!code) {
@@ -59,63 +62,32 @@ export default function ViewPage() {
       }
       console.log("[ViewPage] GET /api/code response:", res.status, json);
 
-      // If server indicates pin protection (often via 403 + { pin_protected: true })
+      // If server says pin_protected (commonly with 403), prompt for PIN
       if (res.status === 403 && json?.pin_protected) {
-        if (!/^\d{4}$/.test(pin)) {
-          setError("This item is PIN-protected. Enter the 4-digit PIN and try Open again.");
-          setLoading(false);
-          return;
-        }
-
-        // verify with PIN
-        const vres = await fetch(`/api/code/${encodeURIComponent(code)}/verify`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pin }),
-        });
-        const vjson = await vres.json().catch(() => ({}));
-        console.log("[ViewPage] POST verify response:", vres.status, vjson);
-
-        if (!vres.ok) {
-          setError(vjson?.error || "PIN invalid or verification failed.");
-          setLoading(false);
-          return;
-        }
-
-        // vjson might be a success shape — normalize url if needed
-        if (isSuccessResp(vjson)) {
-          if ((vjson as any).kind !== "text") {
-            (vjson as any).url = normalizeUrl(vjson) ?? (vjson as any).url;
-          }
-        }
-
-        setResp(vjson);
+        setNeedsPin(true);
+        setError("This item is PIN-protected. Enter the 4-digit PIN below and click Open again.");
         setLoading(false);
         return;
       }
 
-      // If GET failed (non-403), show error
+      // If GET returned an error (non-403), show it
       if (!res.ok) {
         setError(json?.error || "Failed to fetch code.");
         setLoading(false);
         return;
       }
 
-      // On success, json may be either ErrorResp or SuccessResp*
-      // Normalize url for file-like shapes before narrowing
+      // Success - normalise url for file shapes if needed
       if (json && typeof json === "object") {
-        // If it looks like a file response but url field named differently, normalise it
         const possibleKind = (json as any).kind;
         if (possibleKind && possibleKind !== "text") {
           (json as any).url = normalizeUrl(json) ?? (json as any).url;
         }
       }
 
-      // Now narrow safely
       if (isSuccessResp(json)) {
         setResp(json);
       } else {
-        // Could be ErrorResp or unexpected shape
         setResp(json);
       }
     } catch (err: any) {
@@ -126,9 +98,62 @@ export default function ViewPage() {
     }
   }
 
+  // Called when user has already been told a PIN is required (needsPin === true)
+  async function handleVerify(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError(null);
+    setResp(null);
+
+    const code = codeInput.trim();
+    if (!code) {
+      setError("Please enter a code.");
+      return;
+    }
+    if (!/^\d{4}$/.test(pin)) {
+      setError("Enter the 4-digit PIN.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const vres = await fetch(`/api/code/${encodeURIComponent(code)}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin }),
+      });
+      const vjson = await vres.json().catch(() => ({}));
+      console.log("[ViewPage] POST verify response:", vres.status, vjson);
+
+      if (!vres.ok) {
+        // If server still responds with pin_protected, keep the PIN UI visible
+        if (vjson?.pin_protected) {
+          setNeedsPin(true);
+        }
+        setError(vjson?.error || "PIN invalid or verification failed.");
+        setLoading(false);
+        return;
+      }
+
+      // success: normalize url if needed, but only after narrowing
+      if (isSuccessResp(vjson)) {
+        if (vjson.kind !== "text") {
+          (vjson as any).url = normalizeUrl(vjson) ?? (vjson as any).url;
+        }
+      }
+
+      setResp(vjson);
+      setNeedsPin(false); // no longer need pin after successful verify
+    } catch (err: any) {
+      console.error("[ViewPage] verify error:", err);
+      setError(err?.message ?? String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <main className="min-h-[60vh] p-6 max-w-3xl mx-auto">
-      <form onSubmit={handleOpen} className="flex flex-col gap-3 mb-6">
+      <form onSubmit={handleOpen} className="flex flex-col gap-3 mb-4">
         <div className="flex gap-2 items-center">
           <input
             value={codeInput}
@@ -136,21 +161,33 @@ export default function ViewPage() {
             placeholder="Enter code"
             className="p-2 rounded border border-gray-700 bg-[#0b0d11] text-gray-100 flex-1"
           />
-          <input
-            value={pin}
-            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-            placeholder="PIN (if required)"
-            className="p-2 rounded border border-gray-700 bg-[#0b0d11] text-gray-100 w-28 text-center"
-          />
           <button
             type="submit"
             disabled={loading}
             className="ml-2 px-4 py-2 bg-blue-500 rounded text-black font-semibold"
           >
-            {loading ? "..." : "Open"}
+            {loading ? "..." : "Check"}
           </button>
         </div>
-        <div className="text-xs text-gray-400">If item is PIN-protected enter PIN above (4 digits).</div>
+
+        {/* The PIN input is hidden until the server indicates it's required.
+            Once needsPin === true, the user can enter the PIN and click Verify. */}
+        {needsPin && (
+          <form onSubmit={handleVerify} className="mt-2 flex items-center gap-2">
+            <input
+              value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              placeholder="4-digit PIN"
+              className="p-2 rounded border border-gray-700 bg-[#0b0d11] text-gray-100 w-32 text-center"
+            />
+            <button
+              onClick={(ev) => handleVerify(ev)}
+              className="px-3 py-2 bg-green-500 rounded text-black font-semibold"
+            >
+              Verify & Open
+            </button>
+          </form>
+        )}
       </form>
 
       {error && <div className="text-red-400 mb-4">{error}</div>}
@@ -176,33 +213,27 @@ export default function ViewPage() {
 
       {/* File success */}
       {isSuccessResp(resp) && resp.kind !== "text" && (
-        <div className="bg-transparent">
+        <div className="mt-4">
           <h2 className="text-lg font-semibold mb-2">{resp.title ?? "Shared file"}</h2>
 
           {resp.kind === "image" && (
-            <div>
-              <a href={(resp as SuccessRespFile).url} target="_blank" rel="noreferrer">
-                <img
-                  src={(resp as SuccessRespFile).url}
-                  alt={resp.title ?? "image"}
-                  style={{ maxWidth: "100%", borderRadius: 8 }}
-                />
-              </a>
-            </div>
+            <a href={(resp as SuccessRespFile).url} target="_blank" rel="noreferrer">
+              <img
+                src={(resp as SuccessRespFile).url}
+                alt={resp.title ?? "image"}
+                style={{ maxWidth: "100%", borderRadius: 8 }}
+              />
+            </a>
           )}
 
           {resp.kind === "video" && (
-            <div>
-              <video src={(resp as SuccessRespFile).url} controls style={{ width: "100%", borderRadius: 8 }} />
-            </div>
+            <video src={(resp as SuccessRespFile).url} controls style={{ width: "100%", borderRadius: 8 }} />
           )}
 
           {resp.kind === "doc" && (
-            <div>
-              <a href={(resp as SuccessRespFile).url} target="_blank" rel="noreferrer" className="text-blue-400 underline">
-                Open document
-              </a>
-            </div>
+            <a href={(resp as SuccessRespFile).url} target="_blank" rel="noreferrer" className="text-blue-400 underline">
+              Open document
+            </a>
           )}
         </div>
       )}

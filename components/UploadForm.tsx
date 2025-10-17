@@ -1,11 +1,10 @@
-// components/UploadForm.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
 
-type Account = { id: string; slug?: string; name: string };
+type Account = { id: string; name: string; slug?: string };
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 export default function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
@@ -15,11 +14,9 @@ export default function UploadForm() {
   const [pin, setPin] = useState<string | null>(null);
 
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [recipientId, setRecipientId] = useState<string | "">("");
-  const [channel, setChannel] = useState<"general" | "public">("general");
+  const [selectedTarget, setSelectedTarget] = useState<string>("general");
 
   useEffect(() => {
-    // optional: load accounts for recipient dropdown
     (async () => {
       try {
         const res = await fetch("/api/accounts");
@@ -53,24 +50,24 @@ export default function UploadForm() {
 
     try {
       setStatus("Creating object metadata on server...");
+
       const kind = file ? (file.type.startsWith("image/") ? "image" : "doc") : "text";
+      const pin_protected = selectedTarget === "general";
+      const recipient_account_id =
+        selectedTarget !== "general" && selectedTarget !== "public" ? selectedTarget : null;
 
-      // Tell server whether to pin-protect this object. 'general' -> pin_protected true
-      const pin_protected = channel === "general";
-
-      const createBody: any = {
+      const createBody = {
         kind,
         title: file ? file.name : text.slice(0, 80) || "Untitled",
         mime_type: file ? file.type : null,
         bytes: file ? file.size : null,
         text_content: !file ? text : null,
         filename: file ? sanitizeFilename(file.name) : undefined,
-        recipient_account_id: recipientId || null,
-        channel,
+        recipient_account_id,
+        channel: selectedTarget,
         pin_protected,
       };
 
-      // 1) Create DB metadata on server (server must use service key to insert)
       const createRes = await fetch("/api/objects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -78,7 +75,7 @@ export default function UploadForm() {
       });
 
       const createText = await createRes.text();
-      console.log("[UploadForm] createRes status:", createRes.status, "body:", createText);
+      console.log("[UploadForm] create:", createRes.status, createText);
 
       if (!createRes.ok) {
         setStatus("Failed to create object: " + createText);
@@ -91,79 +88,60 @@ export default function UploadForm() {
         code: string;
         pin?: string;
       };
-
       const { id, storage_path: serverStoragePath, code: returnedCode, pin: returnedPin } = createJson;
 
-      // Basic sanity
       if (!id || (!serverStoragePath && file)) {
-        // server should return a storage_path when a file will be uploaded
-        console.error("Server returned unexpected createJson:", createJson);
+        console.error("Unexpected create response", createJson);
         setStatus("Server returned unexpected create response.");
         return;
       }
 
-      // 2) If there is a file, upload via signed PUT URL (private bucket-friendly)
+      // upload file via signed URL route
       if (file) {
-        setStatus("Requesting signed upload URL from server...");
-        // path sent to server should be the storage path (server should have provided it)
-        let storagePath = serverStoragePath ?? `objects/${id}/${sanitizeFilename(file.name)}`;
-        storagePath = storagePath.replace(/^\/+/, ""); // strip leading slash if any
-
+        setStatus("Requesting signed upload URL...");
+        const path = (serverStoragePath ?? `objects/${id}/${sanitizeFilename(file.name)}`).replace(/^\/+/, "");
         const urlRes = await fetch("/api/upload-url", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: storagePath }),
+          body: JSON.stringify({ path }),
         });
-
         const urlJson = await urlRes.json();
-        console.log("[UploadForm] upload-url response:", urlRes.status, urlJson);
-
+        console.log("[UploadForm] upload-url:", urlRes.status, urlJson);
         if (!urlRes.ok) {
           setStatus("Failed to get upload URL: " + JSON.stringify(urlJson));
           return;
         }
 
-        const signedUploadUrl = urlJson.signedUploadUrl || urlJson.signedUrl || urlJson.signed_upload_url;
+        const signedUploadUrl = urlJson.signedUploadUrl || urlJson.signedUrl;
         if (!signedUploadUrl) {
           setStatus("Server did not return a signed upload URL.");
           return;
         }
 
-        // ensure file is present (TypeScript guard)
-        if (!file) {
-          setStatus("No file selected.");
-          return;
-        }
-
-        setStatus("Uploading file to storage (signed URL)...");
+        setStatus("Uploading file...");
         const putRes = await fetch(signedUploadUrl, {
           method: "PUT",
           headers: { "Content-Type": file.type || "application/octet-stream" },
           body: file,
         });
-
         if (!putRes.ok) {
-          const textErr = await putRes.text().catch(() => String(putRes.status));
-          console.error("[UploadForm] PUT to signed URL failed", putRes.status, textErr);
-          setStatus("Upload failed: " + textErr);
+          const txt = await putRes.text().catch(() => String(putRes.status));
+          console.error("[UploadForm] PUT failed", putRes.status, txt);
+          setStatus("Upload failed: " + txt);
           return;
         }
-        console.log("[UploadForm] file uploaded via signed URL");
-      } else {
-        console.log("[UploadForm] text-only item, no storage upload required");
+        console.log("[UploadForm] file uploaded");
       }
 
-      // 3) Confirm with server (server can validate storage existence and return final info)
-      setStatus("Confirming upload with server...");
+      setStatus("Confirming upload...");
       const confirmRes = await fetch(`/api/objects/${id}/confirm`, { method: "POST" });
       const confirmText = await confirmRes.text();
-      console.log("[UploadForm] confirmRes:", confirmRes.status, confirmText);
+      console.log("[UploadForm] confirm:", confirmRes.status, confirmText);
       if (!confirmRes.ok) {
         setStatus("Confirm failed: " + confirmText);
         return;
       }
 
-      // 4) show code and optional PIN
       setCode(returnedCode);
       if (returnedPin) setPin(returnedPin);
       setStatus("Done — code generated.");
@@ -174,28 +152,20 @@ export default function UploadForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-      <div className="flex gap-2 items-center">
-        <label className="text-sm text-gray-300">Channel:</label>
+    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      {/* Unified dropdown: General, Public, then verified accounts */}
+      <div>
+        <label className="text-sm text-gray-300">Send to</label>
         <select
-          value={channel}
-          onChange={(e) => setChannel(e.target.value as "general" | "public")}
-          className="p-2 rounded border border-gray-700 bg-[#0b0d11] text-gray-100"
+          value={selectedTarget}
+          onChange={(e) => setSelectedTarget(e.target.value)}
+          className="w-full mt-1 p-2 rounded border border-gray-700 bg-[#0b0d11] text-gray-100"
         >
           <option value="general">General (PIN protected)</option>
           <option value="public">Public (no PIN)</option>
-        </select>
-
-        <label className="text-sm text-gray-300 ml-4">Send to (optional):</label>
-        <select
-          value={recipientId}
-          onChange={(e) => setRecipientId(e.target.value)}
-          className="p-2 rounded border border-gray-700 bg-[#0b0d11] text-gray-100"
-        >
-          <option value="">General / Public</option>
           {accounts.map((a) => (
             <option key={a.id} value={a.id}>
-              {a.name}
+              {a.name ?? a.slug ?? a.id}
             </option>
           ))}
         </select>
@@ -211,16 +181,11 @@ export default function UploadForm() {
       />
 
       <label className="text-sm text-gray-300">File (optional)</label>
-      <input
-        type="file"
-        onChange={(e) => {
-          const f = e.target.files?.[0] ?? null;
-          setFile(f);
-        }}
-        className="text-sm text-gray-100"
-      />
+      <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm text-gray-100" />
 
-      <p className="hint text-xs text-gray-400">Max {(MAX_FILE_BYTES / 1024 / 1024).toFixed(1)} MB.</p>
+      <p className="hint text-xs text-gray-400">
+        Max {(MAX_FILE_BYTES / 1024 / 1024).toFixed(1)} MB.
+      </p>
 
       <div className="flex gap-2">
         <button type="submit" className="px-4 py-2 bg-blue-500 rounded text-black font-semibold">
@@ -232,7 +197,7 @@ export default function UploadForm() {
           onClick={() => {
             setFile(null);
             setText("");
-            setRecipientId("");
+            setSelectedTarget("general");
             setStatus(null);
             setCode(null);
             setPin(null);
@@ -251,9 +216,7 @@ export default function UploadForm() {
             <div className="font-mono text-lg bg-[#0b1220] px-3 py-2 rounded text-gray-100">{code}</div>
             <button
               className="px-3 py-1 bg-gray-600 rounded text-white"
-              onClick={() => {
-                navigator.clipboard.writeText(code + (pin ? ` (PIN: ${pin})` : ""));
-              }}
+              onClick={() => navigator.clipboard.writeText(code + (pin ? ` (PIN: ${pin})` : ""))}
               type="button"
             >
               Copy
@@ -273,7 +236,9 @@ export default function UploadForm() {
                   Copy PIN
                 </button>
               </div>
-              <div className="text-xs text-gray-400 mt-2">This PIN will not be shown again — save it now.</div>
+              <div className="text-xs text-gray-400 mt-2">
+                This PIN will not be shown again — save it now.
+              </div>
             </div>
           )}
         </div>
