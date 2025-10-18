@@ -8,18 +8,15 @@ export default function Tabs() {
   const inactive = "bg-gray-700 text-white hover:bg-gray-600";
 
   return (
-    <nav className="flex justify-center gap-3 my-4">
-      <Link
-        href="/send"
-        className={`px-5 py-2 rounded ${path === "/send" ? active : inactive}`}
-      >
+    <nav className="flex justify-center gap-2 my-4">
+      <Link href="/send" className={`px-4 py-2 rounded ${path === "/send" ? active : inactive}`}>
         Send
       </Link>
-      <Link
-        href="/view"
-        className={`px-5 py-2 rounded ${path === "/view" ? active : inactive}`}
-      >
+      <Link href="/view" className={`px-4 py-2 rounded ${path === "/view" ? active : inactive}`}>
         View
+      </Link>
+      <Link href="/account" className={`px-3 py-2 rounded ${path === "/account" ? active : inactive}`} title="Account">
+        👤
       </Link>
     </nav>
   );

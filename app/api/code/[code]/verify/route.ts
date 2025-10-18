@@ -4,75 +4,72 @@ import { createServiceClient } from "../../../../../lib/supabaseServer";
 import crypto from "crypto";
 
 export async function POST(req: Request, { params }: { params: { code: string } }) {
-  const code = params.code;
-  const svc = createServiceClient();
-
   try {
-    const body = await req.json().catch(() => ({}));
-    const providedPin = (body && body.pin) ? String(body.pin).trim() : "";
+    const svc = createServiceClient();
+    const { code } = params;
+    const { pin } = await req.json().catch(() => ({}));
 
-    console.log("[verify] code=", code, "providedPin=", providedPin ? "<REDACTED>" : "<empty>");
-
-    // find object by code
-    const { data: objRow, error: findErr } = await svc
-      .from("objects")
-      .select("*")
-      .eq("code", code)
-      .maybeSingle();
-
-    if (findErr) {
-      console.error("[verify] DB lookup error", findErr);
-      return NextResponse.json({ error: "db_error" }, { status: 500 });
-    }
-    if (!objRow) {
-      return NextResponse.json({ error: "not_found" }, { status: 404 });
+    if (!pin || !/^\d{4}$/.test(String(pin))) {
+      return NextResponse.json({ error: "Pin required" }, { status: 400 });
     }
 
-    if (!objRow.pin_protected) {
-      // not protected — return content directly (or instruct client to GET)
-      return NextResponse.json({ error: "not_pin_protected", pin_protected: false }, { status: 400 });
+    const { data: obj, error: objErr } = await svc.from("objects").select("*").eq("code", code).single();
+    if (objErr || !obj) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    if (!obj.pin_protected || !obj.pin_hash) {
+      return NextResponse.json({ error: "Not pin protected" }, { status: 400 });
     }
 
-    if (!providedPin || providedPin.length !== 4) {
-      return NextResponse.json({ error: "pin_required", pin_protected: true }, { status: 403 });
+    const pinHash = crypto.createHash("sha256").update(String(pin)).digest("hex");
+    if (pinHash !== obj.pin_hash) {
+      return NextResponse.json({ error: "Invalid pin", pin_protected: true }, { status: 403 });
     }
 
-    // compute SHA-256 of provided PIN (same as creation)
-    const providedHash = crypto.createHash("sha256").update(providedPin).digest("hex");
+    // PIN matches. Now apply same account membership checks as GET.
+    if (obj.recipient_account_id) {
+      const authHeader = req.headers.get("authorization") || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.replace("Bearer ", "") : null;
+      if (!token) return NextResponse.json({ error: "Authentication required", status: 401 }, { status: 401 });
 
-    // compare with stored hash
-    if (!objRow.pin_hash || providedHash !== objRow.pin_hash) {
-      console.warn("[verify] pin mismatch for code=", code, { providedHash, storedExists: !!objRow.pin_hash });
-      return NextResponse.json({ error: "invalid_pin", pin_protected: true }, { status: 403 });
+      const { data: userData, error: userErr } = await svc.auth.getUser(token);
+      if (userErr || !userData?.user) return NextResponse.json({ error: "Invalid token", status: 401 }, { status: 401 });
+
+      const uid = userData.user.id;
+      if (obj.uploader_user_id !== uid) {
+        const { data: members, error: memErr } = await svc
+          .from("accounts_members")
+          .select("*")
+          .eq("account_id", obj.recipient_account_id)
+          .eq("user_id", uid)
+          .limit(1);
+        if (memErr) return NextResponse.json({ error: memErr.message }, { status: 500 });
+        if (!members || members.length === 0) return NextResponse.json({ error: "Forbidden", status: 403 }, { status: 403 });
+      }
     }
 
-    // PIN OK -> return full content (for text or file, similar to confirm)
-    if (objRow.kind === "text" || !objRow.storage_path) {
-      return NextResponse.json({
-        id: objRow.id,
-        kind: "text",
-        title: objRow.title ?? null,
-        text: objRow.text_content ?? "",
-      });
+    // At this point, allowed. Return content
+    if (obj.kind === "text") {
+      return NextResponse.json({ id: obj.id, kind: "text", text: obj.text_content, title: obj.title });
     }
 
-    // file -> create signed URL
-    const BUCKET = process.env.STORAGE_BUCKET ?? "locker";
-    const { data: signedData, error: signedErr } = await svc.storage.from(BUCKET).createSignedUrl(objRow.storage_path, 60);
-    if (signedErr) {
-      console.error("[verify] createSignedUrl error", signedErr);
-      return NextResponse.json({ error: "failed_to_create_signed_url" }, { status: 500 });
+    const bucket = process.env.NEXT_PUBLIC_STORAGE_BUCKET || "locker";
+    const { data: signed, error: signedErr } = await svc.storage.from(bucket).createSignedUrl(obj.storage_path, 300);
+    if (signedErr) return NextResponse.json({ error: signedErr.message }, { status: 500 });
+
+    const signedUrl = (signed as any).signedUrl || (signed as any).signed_url || null;
+
+    // optionally increment views_used and enforce view_limit (atomic update)
+    if (obj.view_limit && obj.view_limit > 0) {
+      const newViews = (obj.views_used || 0) + 1;
+      if (newViews > obj.view_limit) {
+        return NextResponse.json({ error: "View limit exceeded" }, { status: 403 });
+      }
+      await svc.from("objects").update({ views_used: newViews }).eq("id", obj.id);
     }
-    const signedUrl = (signedData as any)?.signedUrl;
-    return NextResponse.json({
-      id: objRow.id,
-      kind: objRow.kind,
-      title: objRow.title ?? null,
-      url: signedUrl,
-      mimeType: objRow.mime_type ?? null,
-    });
+
+    return NextResponse.json({ id: obj.id, kind: obj.kind, url: signedUrl, title: obj.title, text_content: obj.text_content ?? null });
   } catch (err: any) {
-    console.error("[verify] unexpected error:", err);
-    return NextResponse.json({ error: err?.message ?? String(err) }, { status: 500 });
+    console.error("verify POST error", err);
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
